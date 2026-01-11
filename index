@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aventura Social Sentiment Dashboard | Live Insights</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Leaflet for Map -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap');
+        
+        body { font-family: 'Inter', sans-serif; overflow-x: hidden; }
+        .tab-active { color: #2563eb; }
+        .tab-active::after {
+            content: '';
+            position: absolute; bottom: 0; left: 0; right: 0;
+            height: 2px; background-color: #2563eb; border-radius: 9999px;
+        }
+        [data-tab-content] { display: none; }
+        [data-tab-content].active { display: block; }
+
+        /* Scraping Background Animation */
+        #scraping-bg {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: -1;
+            opacity: 0.03;
+            pointer-events: none;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            overflow: hidden;
+            background: #f8fafc;
+        }
+
+        .data-stream {
+            position: absolute;
+            white-space: nowrap;
+            animation: slide-down linear infinite;
+        }
+
+        @keyframes slide-down {
+            from { transform: translateY(-100%); }
+            to { transform: translateY(100vh); }
+        }
+
+        /* New Complaint Animation */
+        @keyframes slide-in-complaint {
+            0% { transform: translateX(50px); opacity: 0; background: #fee2e2; }
+            100% { transform: translateX(0); opacity: 1; background: #ffffff; }
+        }
+
+        .new-complaint-card {
+            animation: slide-in-complaint 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .pulse-red {
+            box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+            animation: pulse-red 2s infinite;
+        }
+        @keyframes pulse-red {
+            0% { box-shadow: 0 0 0 0px rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0px rgba(239, 68, 68, 0); }
+        }
+
+        #map { height: 500px; border-radius: 0.75rem; z-index: 1; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900 relative">
+
+    <div id="scraping-bg"></div>
+
+    <!-- Header -->
+    <header class="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="bg-indigo-600 p-2 rounded-lg text-white shadow-lg shadow-indigo-200">
+                    <i data-lucide="message-square"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold text-slate-900 leading-tight tracking-tight">City of Aventura</h1>
+                    <p class="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Resident Sentiment & Social Scraper</p>
+                </div>
+            </div>
+            <div class="hidden md:flex items-center gap-6">
+                <div class="flex flex-col items-end">
+                    <span class="text-sm font-semibold text-rose-600 flex items-center gap-1">
+                        <i data-lucide="trending-up" class="w-4 h-4"></i> High Traffic Frequency
+                    </span>
+                    <span class="text-[10px] text-slate-400 font-bold">JANUARY 11, 2026</span>
+                </div>
+                <div class="h-8 w-px bg-slate-200"></div>
+                <div class="text-right">
+                    <div class="text-sm font-bold text-slate-900">Live Scraper</div>
+                    <div id="scraper-status" class="text-[10px] text-emerald-500 font-bold flex items-center justify-end gap-1">
+                        <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span> 
+                        SCRAPING: NEXTDOOR...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto p-4 lg:p-8 space-y-6">
+        
+        <!-- Navigation Tabs -->
+        <div class="flex flex-wrap gap-2 border-b border-slate-200">
+            <button onclick="switchTab('overview')" id="tab-overview" class="tab-btn flex items-center gap-2 px-4 py-2 text-sm font-bold transition-all relative tab-active">
+                <i data-lucide="activity" class="w-[18px]"></i> Executive Sentiment
+            </button>
+            <button onclick="switchTab('map')" id="tab-map" class="tab-btn flex items-center gap-2 px-4 py-2 text-sm font-bold transition-all relative text-slate-500 hover:text-slate-700">
+                <i data-lucide="map" class="w-[18px]"></i> Geographic Hotspots (OSM)
+            </button>
+            <button onclick="switchTab('feed')" id="tab-feed" class="tab-btn flex items-center gap-2 px-4 py-2 text-sm font-bold transition-all relative text-slate-500 hover:text-slate-700">
+                <i data-lucide="rss" class="w-[18px]"></i> Scraped Feed 
+                <span id="feed-count-badge" class="ml-1 px-1.5 py-0.5 bg-rose-500 text-white text-[8px] rounded-full hidden">NEW</span>
+            </button>
+        </div>
+
+        <!-- Tab Content: Overview -->
+        <section id="content-overview" data-tab-content class="active space-y-6">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="lg:col-span-2 bg-white p-6 rounded-xl border border-slate-200 shadow-sm relative overflow-hidden">
+                    <div class="absolute top-0 right-0 p-4 opacity-5">
+                        <i data-lucide="brain-circuit" class="w-24 h-24"></i>
+                    </div>
+                    <h3 class="font-bold text-slate-800 flex items-center gap-2 mb-6">
+                        <i data-lucide="heart" class="text-rose-500 w-5 h-5"></i>
+                        Net Sentiment Score (NLP Analysis)
+                    </h3>
+                    <div class="flex items-end gap-12">
+                        <div class="flex-1">
+                            <div class="flex justify-between mb-2">
+                                <span class="text-xs font-bold text-slate-400 uppercase tracking-widest">Score: 68/100</span>
+                                <span class="text-xs font-bold text-emerald-500 flex items-center gap-1">
+                                    <i data-lucide="arrow-up-right" class="w-3 h-3"></i> +14% Trend
+                                </span>
+                            </div>
+                            <div class="w-full bg-slate-100 h-4 rounded-full overflow-hidden">
+                                <div class="bg-gradient-to-r from-rose-500 via-amber-400 to-emerald-500 h-full" style="width: 68%"></div>
+                            </div>
+                        </div>
+                        <div class="hidden md:block w-32 text-center">
+                            <div class="text-4xl font-black text-slate-800 tracking-tighter">B+</div>
+                            <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Civic Grade</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-slate-900 text-white p-6 rounded-xl shadow-lg border border-slate-800">
+                    <h3 class="font-bold text-xs uppercase tracking-widest text-slate-400 mb-4">Top Keywords Found</h3>
+                    <div class="flex flex-wrap gap-2">
+                        <span class="px-2 py-1 bg-white/10 rounded text-[10px] font-bold text-rose-400">#TRAFFIC</span>
+                        <span class="px-2 py-1 bg-white/10 rounded text-[10px] font-bold text-amber-400">#CONSTRUCTION</span>
+                        <span class="px-2 py-1 bg-white/10 rounded text-[10px] font-bold text-blue-400">#PUMPS</span>
+                        <span class="px-2 py-1 bg-white/10 rounded text-[10px] font-bold text-slate-300">#MALL_PARKING</span>
+                        <span class="px-2 py-1 bg-white/10 rounded text-[10px] font-bold text-emerald-400">#FOUNDERS_PARK</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stats Grid -->
+            <div id="stats-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4"></div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Platform Breakdown -->
+                <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+                    <h3 class="font-bold text-sm mb-6 flex items-center gap-2">
+                        <i data-lucide="share-2" class="text-blue-500 w-4 h-4"></i>
+                        Volume Breakdown
+                    </h3>
+                    <div class="space-y-6" id="platform-volume"></div>
+                </div>
+
+                <!-- Recent Alerts -->
+                <div class="lg:col-span-2 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                        <h3 class="font-bold text-sm flex items-center gap-2 text-rose-600">
+                            <i data-lucide="alert-circle" class="w-[18px]"></i>
+                            High-Priority Community Alerts
+                        </h3>
+                        <div id="incoming-badge" class="hidden px-2 py-1 bg-rose-500 text-white text-[10px] font-bold rounded animate-pulse">NEW DATA DETECTED</div>
+                    </div>
+                    <div class="divide-y divide-slate-100" id="priority-alerts"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tab Content: Map -->
+        <section id="content-map" data-tab-content class="space-y-6">
+            <div class="bg-white p-1 rounded-xl border border-slate-200 shadow-xl overflow-hidden">
+                <div id="map"></div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="bg-white p-4 rounded-xl border border-slate-200">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Biscayne Corridor</p>
+                    <p class="text-sm font-bold">82% Congestion Report Rate</p>
+                </div>
+                <div class="bg-white p-4 rounded-xl border border-slate-200">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Waterways District</p>
+                    <p class="text-sm font-bold">Low tide / Drainage Clearance</p>
+                </div>
+                <div class="bg-white p-4 rounded-xl border border-slate-200">
+                    <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Island Blvd</p>
+                    <p class="text-sm font-bold text-rose-500 font-black tracking-tight">BRIDGE DELAY: 12m+</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Tab Content: Feed -->
+        <section id="content-feed" data-tab-content class="space-y-6">
+            <div class="max-w-3xl mx-auto space-y-4" id="social-feed-container"></div>
+        </section>
+    </main>
+
+    <!-- Attribution Bubble -->
+    <div class="fixed bottom-6 right-6 z-50">
+        <div class="bg-slate-900/90 backdrop-blur-md border border-slate-700 text-white px-4 py-2 rounded-full shadow-2xl flex items-center gap-2 group cursor-default transition-all hover:scale-105">
+            <div class="bg-indigo-500 p-1.5 rounded-full">
+                <i data-lucide="zap" class="w-3.5 h-3.5 fill-white"></i>
+            </div>
+            <span class="text-[11px] font-bold tracking-tight">
+                build using <span class="text-indigo-400 italic">citycode</span> by <span class="uppercase text-emerald-400 tracking-widest">cybrella</span>
+            </span>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="bg-slate-900 text-slate-400 py-12 px-4 mt-auto border-t border-slate-800">
+        <div class="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div>
+                <h4 class="text-white font-bold mb-4 tracking-tight uppercase text-xs">Aventura Civic Data Hub</h4>
+                <p class="text-xs text-slate-500 leading-relaxed">Aggregating public sentiment for proactive urban planning. Analytics generated on Jan 11, 2026.</p>
+            </div>
+            <div>
+                <h4 class="text-white font-bold mb-4 tracking-tight uppercase text-xs">Live Sources</h4>
+                <div class="flex flex-wrap gap-2 text-[10px] font-bold">
+                    <span class="px-2 py-1 bg-slate-800 rounded">NEXTDOOR</span>
+                    <span class="px-2 py-1 bg-slate-800 rounded">X / TWITTER</span>
+                    <span class="px-2 py-1 bg-slate-800 rounded">FACEBOOK</span>
+                    <span class="px-2 py-1 bg-slate-800 rounded">AVENTURA CONNECT</span>
+                </div>
+            </div>
+            <div class="bg-slate-800/30 p-4 rounded-xl border border-slate-800">
+                <p class="text-[10px] leading-relaxed text-slate-500">
+                    NLP Engine: GPT-Analysis-v4. Compliance: CCPA/GDPR Masked. Scraper Frequency: 250ms per shard.
+                </p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // Data Store
+        const COMPLAINTS = [
+            { id: 101, user: "Aventura_Citizen_99", platform: "Nextdoor", content: "Construction on 188th is starting way too early. Every morning at 6:45 AM!", type: "Noise", severity: "High", time: "12m ago", coords: [25.9501, -80.1384] },
+            { id: 102, user: "TurnberryTraveler", platform: "X", content: "The light at Biscayne and 199th needs adjustment. Only 3 cars get through per cycle.", type: "Traffic", severity: "High", time: "45m ago", coords: [25.9595, -80.1436] },
+            { id: 103, user: "WaterwayLife", platform: "Facebook", content: "Storm drain near Island Blvd is clogged with palm fronds. Expecting rain tonight!", type: "Flooding", severity: "Medium", time: "1h ago", coords: [25.9423, -80.1321] }
+        ];
+
+        const INCOMING_BUFFER = [
+            { user: "Resident_X", platform: "Nextdoor", content: "Mall parking exit is a disaster today. Avoid the East entrance!", type: "Traffic", severity: "Medium", coords: [25.9575, -80.1411] },
+            { user: "NightWatch", platform: "X", content: "Founders Park lights are flickering again. Needs maintenance.", type: "Safety", severity: "Low", coords: [25.9515, -80.1352] },
+            { user: "BoatOwner305", platform: "Aventura Connect", content: "Waterway canal speed limit being ignored by jet skis near the bridge.", type: "Noise", severity: "High", coords: [25.9455, -80.1285] }
+        ];
+
+        let map;
+        const STATS = [
+            { label: 'Scraped (24h)', value: '648', icon: 'message-circle', color: 'text-indigo-600', bg: 'bg-indigo-50' },
+            { label: 'Avg Resolution', value: '14h', icon: 'check-circle', color: 'text-emerald-600', bg: 'bg-emerald-50' },
+            { label: 'Risk Factor', value: 'Low', icon: 'activity', color: 'text-blue-600', bg: 'bg-blue-50' },
+            { label: 'Hotspots', value: '4', icon: 'flame', color: 'text-rose-600', bg: 'bg-rose-50' },
+        ];
+
+        function initBackgroundScraper() {
+            const bg = document.getElementById('scraping-bg');
+            const lines = 40;
+            const streams = ['INDEXING_SOCIAL...', 'SCRAPING_NEXTDOOR_API', 'NLP_SENTIMENT_RUNNING', 'PARSING_COORD_DATA', 'DB_SYNC_AVENTURA', 'GET_TRAFFIC_FEED', 'JAN_11_2026_LOGS'];
+            
+            for(let i=0; i<lines; i++) {
+                const stream = document.createElement('div');
+                stream.className = 'data-stream';
+                stream.innerText = streams[Math.floor(Math.random() * streams.length)] + " " + Math.random().toString(36).substring(7);
+                stream.style.left = Math.random() * 100 + '%';
+                stream.style.animationDuration = (Math.random() * 10 + 5) + 's';
+                stream.style.animationDelay = (Math.random() * 5) + 's';
+                bg.appendChild(stream);
+            }
+        }
+
+        function initMap() {
+            map = L.map('map').setView([25.9525, -80.1384], 14);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap'
+            }).addTo(map);
+
+            COMPLAINTS.forEach(c => addMapMarker(c));
+        }
+
+        function addMapMarker(c) {
+            const color = c.severity === 'High' ? '#ef4444' : '#f59e0b';
+            const marker = L.circleMarker(c.coords, {
+                radius: 10,
+                fillColor: color,
+                color: "#fff",
+                weight: 2,
+                opacity: 1,
+                fillOpacity: 0.8
+            }).addTo(map);
+            
+            marker.bindPopup(`<b>${c.type} Complaint</b><br>${c.content}<br><small>${c.platform}</small>`);
+        }
+
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('tab-active');
+                btn.classList.add('text-slate-500');
+            });
+            document.querySelectorAll('[data-tab-content]').forEach(content => {
+                content.classList.remove('active');
+            });
+
+            document.getElementById(`tab-${tabId}`).classList.add('tab-active');
+            document.getElementById(`tab-${tabId}`).classList.remove('text-slate-500');
+            document.getElementById(`content-${tabId}`).classList.add('active');
+            
+            if(tabId === 'map') setTimeout(() => map.invalidateSize(), 100);
+            if(tabId === 'feed') document.getElementById('feed-count-badge').classList.add('hidden');
+        }
+
+        function simulateIncomingData() {
+            setInterval(() => {
+                if (Math.random() > 0.7 && INCOMING_BUFFER.length > 0) {
+                    const fresh = INCOMING_BUFFER.shift();
+                    fresh.id = Date.now();
+                    fresh.time = "Just now";
+                    
+                    // Add to feed
+                    const feedContainer = document.getElementById('social-feed-container');
+                    const newCard = document.createElement('div');
+                    newCard.className = 'bg-white p-5 rounded-xl border border-slate-200 shadow-sm new-complaint-card';
+                    newCard.innerHTML = `
+                        <div class="flex items-center gap-3 mb-4">
+                            <div class="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center font-bold text-indigo-500 text-xs">
+                                ${fresh.user.charAt(0)}
+                            </div>
+                            <div>
+                                <p class="text-sm font-bold text-slate-900">${fresh.user}</p>
+                                <p class="text-[10px] text-slate-400 font-bold">${fresh.platform} • ${fresh.time}</p>
+                            </div>
+                            <div class="ml-auto">
+                                <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${fresh.severity === 'High' ? 'bg-rose-50 text-rose-600' : 'bg-slate-50 text-slate-500'}">
+                                    ${fresh.severity} Severity
+                                </span>
+                            </div>
+                        </div>
+                        <p class="text-sm text-slate-700 leading-relaxed mb-4">"${fresh.content}"</p>
+                    `;
+                    feedContainer.prepend(newCard);
+
+                    // Add to map
+                    addMapMarker(fresh);
+
+                    // Notifications
+                    document.getElementById('incoming-badge').classList.remove('hidden');
+                    document.getElementById('feed-count-badge').classList.remove('hidden');
+                    document.getElementById('scraper-status').innerHTML = `<span class="w-1.5 h-1.5 bg-rose-500 rounded-full animate-ping"></span> INCOMING_ALERT: ${fresh.type.toUpperCase()}`;
+
+                    setTimeout(() => {
+                        document.getElementById('incoming-badge').classList.add('hidden');
+                        document.getElementById('scraper-status').innerHTML = `<span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span> SCRAPING: ${fresh.platform.toUpperCase()}...`;
+                    }, 4000);
+                }
+            }, 6000);
+        }
+
+        window.onload = function() {
+            initBackgroundScraper();
+            initMap();
+            
+            // Render Stats
+            document.getElementById('stats-grid').innerHTML = STATS.map(stat => `
+                <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <p class="text-slate-500 text-[10px] font-bold uppercase tracking-wider">${stat.label}</p>
+                            <h4 class="text-2xl font-black mt-1 text-slate-800 tracking-tight">${stat.value}</h4>
+                        </div>
+                        <div class="${stat.bg} p-2.5 rounded-lg">
+                            <i data-lucide="${stat.icon}" class="${stat.color} w-5 h-5"></i>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+
+            // Platform Bars
+            document.getElementById('platform-volume').innerHTML = [
+                { name: 'Nextdoor', vol: 65, color: 'bg-emerald-500' },
+                { name: 'X', vol: 45, color: 'bg-blue-500' },
+                { name: 'Connect App', vol: 112, color: 'bg-slate-800' }
+            ].map(p => `
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-[11px] font-bold">
+                        <span class="text-slate-600">${p.name}</span>
+                        <span class="text-slate-400">${p.vol} reports</span>
+                    </div>
+                    <div class="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                        <div class="${p.color} h-full" style="width: ${p.vol}%"></div>
+                    </div>
+                </div>
+            `).join('');
+
+            // Alerts
+            document.getElementById('priority-alerts').innerHTML = COMPLAINTS.map(c => `
+                <div class="px-6 py-4 hover:bg-slate-50 transition-colors flex items-start gap-4">
+                    <div class="w-1.5 h-10 bg-rose-500 rounded-full flex-shrink-0 ${c.severity === 'High' ? 'pulse-red' : ''}"></div>
+                    <div class="flex-1 text-xs">
+                        <p class="font-bold text-slate-800">${c.content}</p>
+                        <p class="mt-1 text-slate-400 font-bold uppercase tracking-tighter text-[9px]">${c.platform} • ${c.time}</p>
+                    </div>
+                </div>
+            `).join('');
+
+            // Initial Feed
+            document.getElementById('social-feed-container').innerHTML = COMPLAINTS.map(c => `
+                <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                    <p class="text-[10px] font-bold text-indigo-500 mb-2">${c.platform.toUpperCase()}</p>
+                    <p class="text-sm font-medium text-slate-700 leading-relaxed mb-4">"${c.content}"</p>
+                    <div class="flex items-center gap-2 text-[10px] font-bold text-slate-400">
+                        <i data-lucide="map-pin" class="w-3 h-3"></i> Geocoded Insight
+                    </div>
+                </div>
+            `).join('');
+
+            lucide.createIcons();
+            simulateIncomingData();
+        };
+    </script>
+</body>
+</html>
